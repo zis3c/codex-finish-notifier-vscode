@@ -2,7 +2,7 @@
   "name": "codex-notifier",
   "displayName": "Codex Notifier",
   "description": "Notify with sound when work is complete.",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "icon": "logo.png",
   "publisher": "zis3c",
   "engines": {

@@ -310,28 +310,42 @@ function stopCodexLogWatcher() {
   codexLogMaybeDoneAt = 0;
 }
 
+function getCodexLogRoots() {
+  const roots = [];
+  if (process.platform === "win32") {
+    if (process.env.APPDATA) roots.push(path.join(process.env.APPDATA, "Code", "logs"));
+    if (process.env.APPDATA) roots.push(path.join(process.env.APPDATA, "Cursor", "logs"));
+    return roots;
+  }
+
+  const home = process.env.HOME;
+  if (!home) return roots;
+  roots.push(path.join(home, ".config", "Code", "logs"));
+  roots.push(path.join(home, ".config", "Cursor", "logs"));
+  return roots;
+}
+
 // Find recent Codex.log files across VS Code log sessions/windows.
 function findAllCodexLogFiles() {
-  const appData = process.env.APPDATA;
-  if (!appData) return "";
-  const logsRoot = path.join(appData, "Code", "logs");
-  if (!fs.existsSync(logsRoot)) return "";
-
   const candidates = [];
-  try {
-    const sessions = fs.readdirSync(logsRoot, { withFileTypes: true }).filter((d) => d.isDirectory());
-    for (const session of sessions) {
-      const sessionPath = path.join(logsRoot, session.name);
-      const windows = fs.readdirSync(sessionPath, { withFileTypes: true }).filter((d) => d.isDirectory() && d.name.startsWith("window"));
-      for (const win of windows) {
-        const codexLog = path.join(sessionPath, win.name, "exthost", "openai.chatgpt", "Codex.log");
-        if (!fs.existsSync(codexLog)) continue;
-        const stat = fs.statSync(codexLog);
-        candidates.push({ file: codexLog, mtimeMs: stat.mtimeMs });
+  const roots = getCodexLogRoots();
+  for (const logsRoot of roots) {
+    if (!fs.existsSync(logsRoot)) continue;
+    try {
+      const sessions = fs.readdirSync(logsRoot, { withFileTypes: true }).filter((d) => d.isDirectory());
+      for (const session of sessions) {
+        const sessionPath = path.join(logsRoot, session.name);
+        const windows = fs.readdirSync(sessionPath, { withFileTypes: true }).filter((d) => d.isDirectory() && d.name.startsWith("window"));
+        for (const win of windows) {
+          const codexLog = path.join(sessionPath, win.name, "exthost", "openai.chatgpt", "Codex.log");
+          if (!fs.existsSync(codexLog)) continue;
+          const stat = fs.statSync(codexLog);
+          candidates.push({ file: codexLog, mtimeMs: stat.mtimeMs });
+        }
       }
+    } catch {
+      // noop
     }
-  } catch {
-    return [];
   }
 
   // Keep only recently-touched files to avoid stale sessions.
@@ -340,6 +354,16 @@ function findAllCodexLogFiles() {
   recent.sort((a, b) => b.mtimeMs - a.mtimeMs);
   // Track all recent windows so the active Codex session is not missed.
   return recent.map((c) => c.file);
+}
+
+function isLikelyCodexDocument(doc) {
+  if (!doc || !doc.uri) return false;
+  const scheme = String(doc.uri.scheme || "").toLowerCase();
+  const uri = String(doc.uri.toString() || "").toLowerCase();
+  if (scheme === "openai-codex") return true;
+  if (scheme.includes("codex")) return true;
+  if (uri.includes("openai-codex")) return true;
+  return false;
 }
 
 /**
@@ -485,7 +509,7 @@ function startCodexDocumentWatcher(context) {
   const pollMs = Number.isFinite(pollMsRaw) ? Math.max(250, pollMsRaw) : 600;
 
   const touchDocument = (doc) => {
-    if (!doc || doc.uri.scheme !== "openai-codex") return;
+    if (!isLikelyCodexDocument(doc)) return;
     const key = doc.uri.toString();
     const textLen = doc.getText().length;
     const now = Date.now();
@@ -534,7 +558,7 @@ function startCodexDocumentWatcher(context) {
 
   // Polling catches Codex custom-editor updates that may not emit normal text change events.
   codexPoller = setInterval(async () => {
-    const docs = vscode.workspace.textDocuments.filter((d) => d.uri.scheme === "openai-codex");
+    const docs = vscode.workspace.textDocuments.filter((d) => isLikelyCodexDocument(d));
     logDebug(`poll tick: totalDocs=${vscode.workspace.textDocuments.length} codexDocs=${docs.length}`);
     for (const doc of docs) {
       touchDocument(doc);
@@ -723,4 +747,3 @@ module.exports = {
   activate,
   deactivate
 };
-
